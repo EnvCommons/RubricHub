@@ -1,0 +1,8 @@
+fastapi>=0.115.12
+openreward
+pandas
+pyarrow
+uvicorn>=0.34.3
+openai
+pydantic
+anthropic
