@@ -1,87 +1,72 @@
-# RubricHub OpenReward Environment
+# RubricHub
 
-An OpenReward environment for evaluating open-ended generation tasks using rubric-based LLM grading.
+[![OpenReward Environment](https://img.shields.io/badge/%E2%AD%90%20OpenReward-Environment-f7e6cc)](https://openreward.ai/EnvCommons/rubrichub) [![Hugging Face Dataset](https://img.shields.io/badge/Hugging%20Face-Dataset-orange)](https://huggingface.co/datasets/sojuL/RubricHub_v1)
 
-## Overview
+## Description
 
-RubricHub provides detailed evaluation across 364K tasks spanning:
-- Text summarization
-- Code generation
-- Creative writing
-- Question answering
-- Logical reasoning
+RubricHub is an environment for evaluating open-ended generation tasks using rubric-based LLM grading. It contains 364,000 tasks spanning text summarization, code generation, creative writing, question answering, and logical reasoning. Each task includes 2-67 detailed rubric criteria for fine-grained evaluation.
 
-Each task includes 2-67 rubric criteria evaluated by LLM grading (gpt-5-mini).
+## Capabilities
 
-## Installation
+- Open-ended text generation evaluation
+- Multi-criteria rubric-based assessment
+- Code generation and summarization tasks
+- Creative writing and question answering
 
-```bash
-pip install -r requirements.txt
-```
+## Compute Requirements
 
-## Data Requirements
-
-Requires RubricHub_v1 dataset (3.63 GB). See [DATA_UPLOAD.md](DATA_UPLOAD.md) for instructions.
-
-## Local Testing
-
-```bash
-# Start server
-python server.py
-
-# Run test agent
-export OPENAI_API_KEY="your-key"
-python test_agent.py
-```
-
-## Docker
-
-```bash
-docker build -t rubrichub:latest .
-docker run -p 8080:8080 -v /path/to/data:/orwd_data:ro rubrichub:latest
-```
-
-## Tool
-
-**submit_response(response: str)**: Submit response for rubric-based evaluation
-
-Returns:
-- Detailed per-criterion feedback
-- Scores for each rubric (0 to max points)
-- Total score and normalized reward [0, 1]
-
-## Example
-
-```python
-from openreward import AsyncOpenReward
-import asyncio
-
-async def run_example():
-    client = AsyncOpenReward()
-    env = client.environments.get(name="EnvCommons/rubrichub")
-
-    tasks = await env.list_tasks(split="train")
-    task = tasks[0]
-
-    async with env.session(task=task, secrets={"openai_api_key": "..."}) as session:
-        prompt = await session.get_prompt()
-        print(f"Prompt: {prompt[0].text}")
-
-        result = await session.call_tool("submit_response", {
-            "response": "Your answer here"
-        })
-        print(f"Reward: {result.reward}")
-        print(f"Feedback: {result.blocks[0].text}")
-
-asyncio.run(run_example())
-```
-
-## Dataset
-
-Based on RubricHub_v1 from HuggingFace:
-- **Paper**: [RubricHub: A Comprehensive and Highly Discriminative Rubric Dataset](https://arxiv.org/abs/2601.08430)
-- **Dataset**: [sojuL/RubricHub_v1](https://huggingface.co/datasets/sojuL/RubricHub_v1)
+Agents are given a standard environment with no sandbox or file system access.
 
 ## License
 
-Apache 2.0
+[Apache 2.0](https://opensource.org/licenses/Apache-2.0).
+
+## Tasks
+
+There are two splits in this environment:
+
+- **train**: ~360,000 tasks
+- **test**: ~4,000 tasks
+
+Tasks span multiple domains including summarization, code generation, creative writing, Q&A, and logical reasoning.
+
+## Reward Structure
+
+This is a single-turn environment. The agent submits a response via the `submit_response` tool. An LLM grader (gpt-5-mini) evaluates against 2-67 rubric criteria, scoring each from 0 to its maximum points. Reward is normalized: total earned / total possible (0.0 to 1.0).
+
+## Data
+
+Data consists of Parquet files (3.63 GB total) sourced from [HuggingFace sojuL/RubricHub_v1](https://huggingface.co/datasets/sojuL/RubricHub_v1). Each row contains a prompt, rubric criteria with point values, and task metadata. Data is stored on the OpenReward platform.
+
+## Tools
+
+| Tool | Description |
+|------|-------------|
+| `submit_response` | Submit your response for rubric-based evaluation. Ends the episode. |
+
+## Time Horizon
+
+Single-turn. The agent reads the prompt and submits one response.
+
+## Environment Difficulty
+
+RubricHub evaluates open-ended generation quality across multiple domains with fine-grained rubric assessment.
+
+## Other Environment Requirements
+
+OpenAI API key required for LLM-based grading. Pass via `secrets={"openai_api_key": "..."}`.
+
+## Safety
+
+Agents in RubricHub generate text responses in a standard environment. The environment does not present direct safety risks.
+
+## Citation
+
+```bibtex
+@article{rubrichub2025,
+  title={RubricHub: A Comprehensive and Highly Discriminative Rubric Dataset},
+  author={sojuL},
+  journal={arXiv preprint arXiv:2601.08430},
+  year={2025}
+}
+```
