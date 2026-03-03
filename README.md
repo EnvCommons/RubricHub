@@ -63,10 +63,10 @@ Agents in RubricHub generate text responses in a standard environment. The envir
 ## Citation
 
 ```bibtex
-@article{rubrichub2025,
-  title={RubricHub: A Comprehensive and Highly Discriminative Rubric Dataset},
-  author={sojuL},
+@article{li2026rubrichub,
+  title={RubricHub: A Comprehensive and Highly Discriminative Rubric Dataset via Automated Coarse-to-Fine Generation},
+  author={Li, Sunzhu and Zhao, Jiale and Wei, Miteto and Ren, Huimin and Zhou, Yang and Yang, Jingwen and Liu, Shunyu and Zhang, Kaike and Chen, Wei},
   journal={arXiv preprint arXiv:2601.08430},
-  year={2025}
+  year={2026}
 }
 ```
