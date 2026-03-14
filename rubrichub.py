@@ -186,15 +186,18 @@ class RubricHub(Environment):
     def _extract_prompt(self, task_data: Dict) -> str:
         """Extract prompt text from task data"""
         prompt_list = task_data.get("prompt")
-        if prompt_list is None or (isinstance(prompt_list, list) and len(prompt_list) == 0):
+        if prompt_list is None:
             return "No prompt available"
 
-        # Concatenate all prompt turns
-        if isinstance(prompt_list, list):
-            return "\n\n".join(
+        # Handle list, numpy array, or any iterable of dicts
+        if hasattr(prompt_list, '__iter__') and not isinstance(prompt_list, str):
+            parts = [
                 p["content"] for p in prompt_list
                 if isinstance(p, dict) and "content" in p
-            )
+            ]
+            if parts:
+                return "\n\n".join(parts)
+            return "No prompt available"
 
         return str(prompt_list)
 
