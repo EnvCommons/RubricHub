@@ -144,7 +144,21 @@ class RubricHub(Environment):
         ]
 
     async def get_prompt(self) -> List[TextBlock]:
-        return [TextBlock(text=self.prompt_text)]
+        # Models were responding to the raw task text in plain prose and never
+        # invoking submit_response, producing zero tool-call rollouts on every
+        # task (env-clinic loadtest "zero tool-call steps" failure). The task
+        # prompts in this dataset are open-ended user content with no hint
+        # that submission must happen via a tool, so we wrap them with an
+        # explicit instruction that the only way to be graded is to call
+        # submit_response.
+        instructions = (
+            "You will be given a task below. Compose your full response, then "
+            "submit it for evaluation by calling the `submit_response` tool "
+            "with your answer as the `response` argument. Do not reply with "
+            "plain text — the grader only sees the tool call.\n\n"
+            "=== TASK ===\n"
+        )
+        return [TextBlock(text=instructions + self.prompt_text)]
 
     def _load_task_data(self, file: str, local_idx: int) -> Dict[str, Any]:
         """Load specific task by file and local index (MEMORY EFFICIENT)"""
