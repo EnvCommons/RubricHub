@@ -52,7 +52,8 @@ single row group into hundreds and inflates the file.)
 
 ## Required directory structure
 
-The five files must sit in a top-level **`data/`** folder:
+Upload the five files on [openreward.ai](https://openreward.ai), into a top-level
+**`data/`** folder:
 
 ```
 data/
