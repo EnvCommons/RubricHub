@@ -27,6 +27,52 @@ else:
 # PATH = Path(__file__).parent / "data"
 
 
+# Expected corpus, keyed by shard filename -> row count. See DATA_UPLOAD.md.
+# Validated at import so a partial upload fails loudly instead of silently serving
+# a fraction of the dataset (a Chat-only mount once passed as a healthy env).
+# NOTE: "rurbichub" is a typo, but it is the name the live Chat shard was uploaded
+# under, so the other shards match it; renaming needs a coordinated re-upload.
+EXPECTED_SHARDS: Dict[str, int] = {
+    "rurbichub_v1_Chat.parquet": 9812,
+    "rurbichub_v1_Instruction_Following.parquet": 95173,
+    "rurbichub_v1_Medical.parquet": 29681,
+    "rurbichub_v1_Science.parquet": 29418,
+    "rurbichub_v1_Writing.parquet": 17444,
+}
+
+# Escape hatch for local development against a partial corpus.
+ALLOW_PARTIAL_CORPUS = os.environ.get("RUBRICHUB_ALLOW_PARTIAL_CORPUS") == "1"
+
+
+def _validate_corpus(parquet_dir: Path, found: Dict[str, int]) -> None:
+    """Fail loudly when the mounted corpus does not match EXPECTED_SHARDS."""
+    problems = []
+    for name, want in EXPECTED_SHARDS.items():
+        if name not in found:
+            problems.append(f"MISSING {name} (expected {want} rows)")
+        elif found[name] != want:
+            problems.append(f"{name}: {found[name]} rows, expected {want}")
+    for name in sorted(set(found) - set(EXPECTED_SHARDS)):
+        problems.append(f"UNEXPECTED {name} ({found[name]} rows) not in EXPECTED_SHARDS")
+
+    if not problems:
+        return
+
+    want_total = sum(EXPECTED_SHARDS.values())
+    got_total = sum(found.values())
+    detail = (
+        f"RubricHub corpus at {parquet_dir} is incomplete or unexpected: "
+        + "; ".join(problems)
+        + f" | rows {got_total}/{want_total} "
+        f"({100.0 * got_total / want_total:.1f}% of the expected corpus). "
+        "See DATA_UPLOAD.md. Set RUBRICHUB_ALLOW_PARTIAL_CORPUS=1 to proceed anyway."
+    )
+    if ALLOW_PARTIAL_CORPUS:
+        logger.warning("%s", detail)
+        return
+    raise RuntimeError(detail)
+
+
 def build_task_index() -> List[Dict[str, Any]]:
     """Build lightweight index with row IDs and metadata from all .parquet files in data/"""
     # Find all .parquet files in PATH / "data"
@@ -39,9 +85,11 @@ def build_task_index() -> List[Dict[str, Any]]:
 
     tasks = []
     global_row_id = 0
+    found: Dict[str, int] = {}
 
     for file in parquet_files:
         df = pd.read_parquet(file, columns=["data_source", "ability"])
+        found[file.name] = len(df)
 
         # Create task entries with global row IDs
         for local_idx in range(len(df)):
@@ -54,6 +102,7 @@ def build_task_index() -> List[Dict[str, Any]]:
             })
             global_row_id += 1
 
+    _validate_corpus(parquet_dir, found)
     return tasks
 
 
@@ -84,9 +133,9 @@ Instructions:
 3. Provide a brief explanation (1-2 sentences)
 4. Assign a score from 0 to {max_points}
 
-Output format:
+Output format (the score MUST be wrapped in <answer></answer> tags):
 Analysis: [Your 1-2 sentence explanation]
-Score: [Integer from 0 to {max_points}]
+<answer>[Integer from 0 to {max_points}]</answer>
 """
 
 
@@ -275,19 +324,18 @@ class RubricHub(Environment):
         return await asyncio.gather(*grading_tasks)
 
     def _parse_score(self, grading_response: str, max_points: int) -> float:
-        """Extract score with robust fallback parsing"""
-        # Look for "Score: X" pattern
-        match = re.search(r"Score:\s*(\d+(?:\.\d+)?)", grading_response, re.IGNORECASE)
-        if match:
-            score = float(match.group(1))
-            return max(0.0, min(float(max_points), score))
-
-        # Fallback: find any number
-        numbers = re.findall(r"\b(\d+(?:\.\d+)?)\b", grading_response)
-        if numbers:
-            return max(0.0, min(float(max_points), float(numbers[-1])))
-
-        return 0.0  # Default if parsing fails
+        """Extract the score from the judge's <answer></answer> tag."""
+        # Last tag wins, so a tag quoted inside the analysis can't shadow the real score.
+        matches = re.findall(
+            r"<answer>\s*(\d+(?:\.\d+)?)\s*</answer>", grading_response, re.IGNORECASE
+        )
+        if not matches:
+            # Raise rather than guess: a fabricated score is indistinguishable from a real one.
+            raise ValueError(
+                "Grader response contained no parseable <answer></answer> score "
+                f"(max_points={max_points}); response was: {grading_response!r}"
+            )
+        return max(0.0, min(float(max_points), float(matches[-1])))
 
     def _format_grading_output(
         self,
