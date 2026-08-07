@@ -4,14 +4,14 @@
 
 ## Description
 
-RubricHub is an environment for evaluating open-ended generation tasks using rubric-based LLM grading. It contains 364,000 tasks spanning text summarization, code generation, creative writing, question answering, and logical reasoning. Each task includes 2-67 detailed rubric criteria for fine-grained evaluation.
+RubricHub is an environment for evaluating open-ended generation tasks using rubric-based LLM grading. It contains 181,528 tasks across five domains — chat, instruction following, medical, science and writing — and each task carries 2-67 detailed rubric criteria for fine-grained evaluation. Prompts are multilingual (English and Chinese predominate), and rubric criteria are written in the language of their prompt.
 
 ## Capabilities
 
 - Open-ended text generation evaluation
 - Multi-criteria rubric-based assessment
-- Code generation and summarization tasks
-- Creative writing and question answering
+- Multilingual prompts and rubric criteria
+- Domain-stratified evaluation via the `ability` field
 
 ## Compute Requirements
 
@@ -23,20 +23,39 @@ Agents are given a standard environment with no sandbox or file system access.
 
 ## Tasks
 
-There are two splits in this environment:
+There is a single split, **train**, with **181,528 tasks**. `list_splits()` returns only
+`["train"]`; any other split name raises.
 
-- **train**: ~360,000 tasks
-- **test**: ~4,000 tasks
+| domain (`ability`) | tasks |
+|---|---:|
+| Instruction_Following | 95,173 |
+| Medical | 29,681 |
+| Science | 29,418 |
+| Writing | 17,444 |
+| chat | 9,812 |
 
-Tasks span multiple domains including summarization, code generation, creative writing, Q&A, and logical reasoning.
+`ability` and `data_source` carry the same value on every row. Neither affects grading —
+they are metadata, useful for stratifying results by domain. Note `chat` is lower-case
+while the other four are capitalised.
 
 ## Reward Structure
 
 This is a single-turn environment. The agent submits a response via the `submit_response` tool. An LLM grader (gpt-5-mini) evaluates against 2-67 rubric criteria, scoring each from 0 to its maximum points. Reward is normalized: total earned / total possible (0.0 to 1.0).
 
+The grader returns each score inside `<answer></answer>` tags. If a grader response cannot be parsed, the episode raises rather than substituting a score — a couldn't-grade condition is never scored as a real result.
+
 ## Data
 
-Data consists of Parquet files (3.63 GB total) sourced from [HuggingFace sojuL/RubricHub_v1](https://huggingface.co/datasets/sojuL/RubricHub_v1). Each row contains a prompt, rubric criteria with point values, and task metadata. Data is stored on the OpenReward platform.
+Five Parquet files (~995 MiB total), one per domain, sourced from the **`RuRL/`** directory
+of [HuggingFace sojuL/RubricHub_v1](https://huggingface.co/datasets/sojuL/RubricHub_v1) and
+stored on the OpenReward platform. Each row contains a prompt, rubric criteria with point
+values, and task metadata.
+
+The dataset repo also holds a `sft_RuFT/` directory (182,732 rows) which is **not** part of
+this environment: it is supervised-fine-tuning data whose rows already carry a model answer,
+a `rubric_score` and per-criterion judge verdicts. It uses a different schema and adds no new
+prompts. See `DATA_UPLOAD.md` — the environment validates its corpus at import and raises if a
+domain shard is missing.
 
 ## Tools
 
