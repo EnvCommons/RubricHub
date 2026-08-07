@@ -182,15 +182,7 @@ class RubricHub(Environment):
 
     @staticmethod
     def _coerce_rubric_list(rubrics_data: Any) -> list:
-        """Normalize a rubric column value to a Python list.
-
-        Parquet list-typed columns deserialize via pandas/pyarrow to a
-        ``numpy.ndarray``, never a ``list`` — so the previous
-        ``isinstance(rubrics_data, list)`` check was always False and every
-        task's real rubric was silently discarded. Accept any non-string
-        sequence (ndarray, list, tuple) and return a plain list; return [] for
-        anything else (None, scalar, str).
-        """
+        """Normalize a rubric column value to a list; parquet gives ndarray, not list."""
         if rubrics_data is None or isinstance(rubrics_data, str):
             return []
         if isinstance(rubrics_data, np.ndarray):
@@ -217,10 +209,7 @@ class RubricHub(Environment):
                     for r in rubrics_data
                 ]
 
-        # If no rubrics found, fall back to a generic criterion — but make it
-        # LOUD. A silent placeholder is exactly what let the type bug above ship
-        # undetected while looking healthy in production (grading against
-        # "Overall quality and correctness" instead of the task's real rubric).
+        # Warn rather than substitute a placeholder silently.
         logger.warning(
             "RubricHub: no per-criterion rubric found for task "
             "(row_id=%s, file=%s); falling back to a single generic criterion. "
