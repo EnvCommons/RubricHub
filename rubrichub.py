@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from pathlib import Path
 from typing import Any, Dict, List
 
+import numpy as np
 import openai
 import pandas as pd
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 from openreward.environments import Environment, JSONObject, TextBlock, ToolOutput, tool
 
@@ -176,25 +180,43 @@ class RubricHub(Environment):
 
         return df.iloc[local_idx].to_dict()
 
+    @staticmethod
+    def _coerce_rubric_list(rubrics_data: Any) -> list:
+        """Normalize a rubric column value to a list; parquet gives ndarray, not list."""
+        if rubrics_data is None or isinstance(rubrics_data, str):
+            return []
+        if isinstance(rubrics_data, np.ndarray):
+            return rubrics_data.tolist()
+        if isinstance(rubrics_data, (list, tuple)):
+            return list(rubrics_data)
+        return []
+
     def _parse_rubrics(self, task_data: Dict) -> List[Rubric]:
         """Extract rubrics from task data"""
         # Try 'Rubrics' field first (flat structure)
         if "Rubrics" in task_data:
-            rubrics_data = task_data["Rubrics"]
-            if rubrics_data is not None and isinstance(rubrics_data, list) and len(rubrics_data) > 0:
-                return [Rubric(**r) for r in rubrics_data]
+            rubrics_data = self._coerce_rubric_list(task_data["Rubrics"])
+            if rubrics_data:
+                return [Rubric(**dict(r)) for r in rubrics_data]
 
         # Fallback to reward_model rubrics
         reward_model = task_data.get("reward_model")
         if reward_model is not None and isinstance(reward_model, dict):
-            rubrics_data = reward_model.get("rubrics", [])
-            if rubrics_data is not None and isinstance(rubrics_data, list) and len(rubrics_data) > 0:
+            rubrics_data = self._coerce_rubric_list(reward_model.get("rubrics", []))
+            if rubrics_data:
                 return [
                     Rubric(criterion=r["criterion"], points=r["points"])
                     for r in rubrics_data
                 ]
 
-        # If no rubrics found, create a default one
+        # Warn rather than substitute a placeholder silently.
+        logger.warning(
+            "RubricHub: no per-criterion rubric found for task "
+            "(row_id=%s, file=%s); falling back to a single generic criterion. "
+            "This erases per-criterion grading — check the task's data format.",
+            getattr(getattr(self, "validated", None), "row_id", "?"),
+            getattr(getattr(self, "validated", None), "file", "?"),
+        )
         return [Rubric(criterion="Overall quality and correctness", points=100)]
 
     def _extract_prompt(self, task_data: Dict) -> str:
