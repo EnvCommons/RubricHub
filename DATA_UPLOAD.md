@@ -38,8 +38,10 @@ fork, or disaster recovery. Fetch the five `RuRL/` files and upload them **verba
 
 ```bash
 huggingface-cli download sojuL/RubricHub_v1 --repo-type dataset --include 'RuRL/*.parquet'
-# then upload those five files to /orwd_data/data/
 ```
+
+Then upload those five files to the environment's namespace at
+[openreward.ai](https://openreward.ai), into a `data/` folder.
 
 Do **not** re-encode them. The files are already exactly the five domain shards, one
 domain each, correctly named — no partitioning or conversion is required. Uploading
@@ -50,23 +52,22 @@ single row group into hundreds and inflates the file.)
 
 ## Required directory structure
 
-Upload the five files so they land at **`/orwd_data/data/`**:
+The five files must sit in a top-level **`data/`** folder:
 
 ```
-/orwd_data/
-└── data/
-    ├── rurbichub_v1_Chat.parquet                  (  9,812 samples)
-    ├── rurbichub_v1_Instruction_Following.parquet ( 95,173 samples)
-    ├── rurbichub_v1_Medical.parquet               ( 29,681 samples)
-    ├── rurbichub_v1_Science.parquet               ( 29,418 samples)
-    └── rurbichub_v1_Writing.parquet               ( 17,444 samples)
+data/
+├── rurbichub_v1_Chat.parquet                  (  9,812 samples)
+├── rurbichub_v1_Instruction_Following.parquet ( 95,173 samples)
+├── rurbichub_v1_Medical.parquet               ( 29,681 samples)
+├── rurbichub_v1_Science.parquet               ( 29,418 samples)
+└── rurbichub_v1_Writing.parquet               ( 17,444 samples)
 ```
 
 Two things that have caused real problems here:
 
-- **The path is `/orwd_data/data/`, with no `rubrichub/` level.** `rubrichub.py` globs
-  `PATH / "data" / "*.parquet"` where `PATH = /orwd_data`. Files uploaded to
-  `/orwd_data/rubrichub/data/` are never read, and nothing reports an error.
+- **`data/` is the top level — there is no `rubrichub/` above it.** `rubrichub.py`
+  globs `data/*.parquet` relative to the mount root, so files nested under an extra
+  `rubrichub/` directory are never read, and nothing reports an error.
 - **`rurbichub` is a typo — keep it.** It is the upstream spelling: the files in the
   dataset's own `RuRL/` directory are named `rurbichub_v1_*.parquet`. Our mount mirrors
   the source repo name-for-name. Do not "correct" it.
