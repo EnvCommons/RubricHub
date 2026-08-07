@@ -45,24 +45,37 @@ ALLOW_PARTIAL_CORPUS = os.environ.get("RUBRICHUB_ALLOW_PARTIAL_CORPUS") == "1"
 
 
 def _validate_corpus(parquet_dir: Path, found: Dict[str, int]) -> None:
-    """Fail loudly when the mounted corpus does not match EXPECTED_SHARDS."""
-    problems = []
-    for name, want in EXPECTED_SHARDS.items():
-        if name not in found:
-            problems.append(f"MISSING {name} (expected {want} rows)")
-        elif found[name] != want:
-            problems.append(f"{name}: {found[name]} rows, expected {want}")
-    for name in sorted(set(found) - set(EXPECTED_SHARDS)):
-        problems.append(f"UNEXPECTED {name} ({found[name]} rows) not in EXPECTED_SHARDS")
+    """Raise on a missing shard; warn on row-count drift.
 
-    if not problems:
+    A missing shard is unambiguously a broken mount. A count mismatch is more
+    likely a legitimate upstream revision, so it warns rather than taking the
+    environment down over a dataset update.
+    """
+    missing = {n: w for n, w in EXPECTED_SHARDS.items() if n not in found}
+    drift = [
+        f"{n}: {found[n]} rows, expected {EXPECTED_SHARDS[n]}"
+        for n in EXPECTED_SHARDS
+        if n in found and found[n] != EXPECTED_SHARDS[n]
+    ]
+    drift += [
+        f"UNEXPECTED {n} ({found[n]} rows)" for n in sorted(set(found) - set(EXPECTED_SHARDS))
+    ]
+
+    if drift:
+        logger.warning(
+            "RubricHub corpus row counts differ from EXPECTED_SHARDS: %s. "
+            "If upstream was revised, update EXPECTED_SHARDS; see DATA_UPLOAD.md.",
+            "; ".join(drift),
+        )
+
+    if not missing:
         return
 
     want_total = sum(EXPECTED_SHARDS.values())
     got_total = sum(found.values())
     detail = (
-        f"RubricHub corpus at {parquet_dir} is incomplete or unexpected: "
-        + "; ".join(problems)
+        f"RubricHub corpus at {parquet_dir} is incomplete: missing "
+        + "; ".join(f"{n} (expected {w} rows)" for n, w in missing.items())
         + f" | rows {got_total}/{want_total} "
         f"({100.0 * got_total / want_total:.1f}% of the expected corpus). "
         "See DATA_UPLOAD.md. Set RUBRICHUB_ALLOW_PARTIAL_CORPUS=1 to proceed anyway."

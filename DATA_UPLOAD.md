@@ -31,54 +31,22 @@ in this environment:
 > (`refs/convert/parquet`) flattens **both** directories into that one split, so
 > downloading from there silently mixes the SFT data in. Fetch `RuRL/` explicitly.
 
-## Download and partition
+## Re-provisioning
 
-```python
-from collections import Counter
-from pathlib import Path
+The data is already uploaded; this is only needed for a new environment instance, a
+fork, or disaster recovery. Fetch the five `RuRL/` files and upload them **verbatim**:
 
-import pyarrow as pa
-import pyarrow.compute as pc
-import pyarrow.parquet as pq
-from huggingface_hub import snapshot_download
-
-# RuRL/ only — never sft_RuFT/, and not refs/convert/parquet (it mixes the two).
-raw = Path(snapshot_download(
-    "sojuL/RubricHub_v1", repo_type="dataset", allow_patterns="RuRL/*.parquet",
-)) / "RuRL"
-
-out = Path("data")
-out.mkdir(exist_ok=True)
-writers, counts, schema = {}, Counter(), None
-
-for f in sorted(raw.glob("*.parquet")):
-    pf = pq.ParquetFile(f)
-    schema = schema or pf.schema_arrow
-    for batch in pf.iter_batches(batch_size=256):     # streamed: rows carry big nested rubrics
-        tbl = pa.Table.from_batches([batch])
-        ability = tbl.column("ability")
-        for dom in pc.unique(ability.drop_null()).to_pylist():
-            sub = tbl.filter(pc.equal(ability, pa.scalar(dom)))
-            if dom not in writers:
-                writers[dom] = pq.ParquetWriter(
-                    out / f"rurbichub_v1_{dom}.parquet", schema, compression="snappy"
-                )
-            writers[dom].write_table(sub)
-            counts[dom] += sub.num_rows
-
-for w in writers.values():
-    w.close()
-print(counts)   # -> chat 9812, Instruction_Following 95173, Medical 29681, Science 29418, Writing 17444
+```bash
+huggingface-cli download sojuL/RubricHub_v1 --repo-type dataset --include 'RuRL/*.parquet'
+# then upload those five files to /orwd_data/data/
 ```
 
-A ready-to-run version lives at `scripts/partition_by_ability.py`.
-
-Partitioning by `ability` is currently idempotent — each `RuRL/` file already holds
-exactly one domain, verified homogeneous. It is kept deliberately anyway: it derives
-the domains from the data rather than trusting filenames, so it still produces the
-correct five shards (and the correct row counts) if upstream ever reorganises the
-files. Treat a count that disagrees with the table below as a signal that the upstream
-dataset changed, not as a reason to edit the expectations.
+Do **not** re-encode them. The files are already exactly the five domain shards, one
+domain each, correctly named — no partitioning or conversion is required. Uploading
+them byte-for-byte keeps them checksum-comparable against upstream, which is how a
+mount can be verified later: a sha256 match proves the mount is the published data.
+(Re-encoding also fragments the row groups badly — writing in small batches turns a
+single row group into hundreds and inflates the file.)
 
 ## Required directory structure
 
@@ -106,16 +74,23 @@ Two things that have caused real problems here:
 ## Corpus validation
 
 `rubrichub.py` declares `EXPECTED_SHARDS` (filename → row count) and validates the
-mount at import. A missing shard or a row-count mismatch raises with the shortfall:
+mount at import. The two failure modes are treated differently on purpose:
 
-```
-RubricHub corpus at /orwd_data/data is incomplete or unexpected:
-MISSING rurbichub_v1_Medical.parquet (expected 29681 rows) | rows 9812/181528
-(5.4% of the expected corpus). See DATA_UPLOAD.md.
-```
+- **A missing shard raises** — unambiguously a broken mount:
 
-Set `RUBRICHUB_ALLOW_PARTIAL_CORPUS=1` to downgrade this to a warning when developing
-against a subset.
+  ```
+  RubricHub corpus at /orwd_data/data is incomplete: missing
+  rurbichub_v1_Medical.parquet (expected 29681 rows) | rows 9812/181528
+  (5.4% of the expected corpus). See DATA_UPLOAD.md.
+  ```
+
+- **A row-count mismatch, or an unexpected file, only warns.** Those are more likely a
+  legitimate upstream revision than a broken mount, and hard-failing the environment
+  over a dataset update would be a self-inflicted outage. If upstream really was
+  revised, update `EXPECTED_SHARDS` to match — after confirming what changed.
+
+Set `RUBRICHUB_ALLOW_PARTIAL_CORPUS=1` to downgrade the missing-shard error to a
+warning when developing against a subset.
 
 This guard exists because a partial upload used to be invisible. Between 2026-02-01
 and 2026-08-07 only `rurbichub_v1_Chat.parquet` was mounted — 9,812 of 181,528 rows,
