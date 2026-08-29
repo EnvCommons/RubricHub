@@ -153,6 +153,11 @@ Analysis: [Your 1-2 sentence explanation]
 
 
 # Pydantic models
+# Reward for a submission made after the task has already been graded. Negative
+# so repeat submissions are actively discouraged, not merely left unscored.
+REPEAT_SUBMISSION_PENALTY = -0.1
+
+
 class Rubric(BaseModel):
     criterion: str
     points: int
@@ -183,6 +188,11 @@ class RubricHub(Environment):
 
         self.client = openai.AsyncClient(api_key=api_key)
         self.validated = TaskSpec.model_validate(task_spec)
+
+        # Graded submissions this session. The grading output breaks the score
+        # down criterion by criterion, so an uncapped tool lets the agent read
+        # which rubric items it missed and resubmit against them.
+        self.submitted = 0
 
         # Lazy load specific task (single row only)
         self.task_data = self._load_task_data(self.validated.file, self.validated.local_idx)
@@ -377,6 +387,16 @@ class RubricHub(Environment):
         Submit your response to be evaluated against all rubric criteria.
         Returns detailed feedback for each criterion plus total score.
         """
+        if self.submitted > 0:
+            return ToolOutput(
+                blocks=[TextBlock(text="A response has already been submitted for this task. "
+                                       "This episode is over: it is not re-graded, and repeat "
+                                       "submissions are penalised (reward -0.1).")],
+                metadata={"already_submitted": True, "submission_count": self.submitted},
+                reward=REPEAT_SUBMISSION_PENALTY,
+                finished=True,
+            )
+
         # Grade all criteria in parallel
         criterion_results = await self._grade_all_criteria(params.response)
 
@@ -389,6 +409,8 @@ class RubricHub(Environment):
         display_text = self._format_grading_output(
             criterion_results, total_earned, total_possible, reward
         )
+
+        self.submitted += 1
 
         return ToolOutput(
             blocks=[TextBlock(text=display_text)],
