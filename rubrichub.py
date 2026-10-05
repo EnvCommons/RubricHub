@@ -354,9 +354,12 @@ class RubricHub(Environment):
         )
         if not matches:
             # Raise rather than guess: a fabricated score is indistinguishable from a real one.
+            # The grader's reply can restate the criterion or reference answer, and exception
+            # messages reach the model, so the reply goes to the server log only.
+            logger.warning("RubricHub grader reply without an <answer> score: %r", grading_response)
             raise ValueError(
                 "Grader response contained no parseable <answer></answer> score "
-                f"(max_points={max_points}); response was: {grading_response!r}"
+                f"(max_points={max_points})"
             )
         return max(0.0, min(float(max_points), float(matches[-1])))
 
@@ -367,13 +370,15 @@ class RubricHub(Environment):
         total_possible: int,
         reward: float
     ) -> str:
-        """Format grading results for display"""
+        """Format grading results for display.
+
+        Scores only: the criterion text and the grader's feedback state or restate the
+        rubric and reference answer, and the model sees this text.
+        """
         lines = ["# Rubric Evaluation Results\n"]
 
         for i, result in enumerate(criterion_results, 1):
-            lines.append(f"## Criterion {i}: {result['criterion']}")
-            lines.append(f"**Score:** {result['score']}/{result['max_points']}")
-            lines.append(f"**Feedback:** {result['grading_response']}\n")
+            lines.append(f"## Criterion {i}: {result['score']}/{result['max_points']}")
 
         lines.append("---")
         lines.append(f"## Final Score: {total_earned:.1f}/{total_possible}")
@@ -385,7 +390,7 @@ class RubricHub(Environment):
     async def submit_response(self, params: SubmitResponseInput) -> ToolOutput:
         """
         Submit your response to be evaluated against all rubric criteria.
-        Returns detailed feedback for each criterion plus total score.
+        Returns the score for each criterion plus the total score.
         """
         if self.submitted > 0:
             return ToolOutput(
@@ -419,7 +424,11 @@ class RubricHub(Environment):
                 "total_points_earned": total_earned,
                 "total_points_possible": total_possible,
                 "reward": reward,
-                "criterion_results": criterion_results,
+                # Per-criterion scores without the criterion text or grader feedback.
+                "criterion_results": [
+                    {"criterion_index": i, "max_points": r["max_points"], "score": r["score"]}
+                    for i, r in enumerate(criterion_results, 1)
+                ],
                 "data_source": self.validated.data_source,
                 "ability": self.validated.ability
             },
