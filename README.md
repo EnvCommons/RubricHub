@@ -40,7 +40,7 @@ while the other four are capitalised.
 
 ## Reward Structure
 
-This is a single-turn environment. The agent submits a response via the `submit_response` tool. An LLM grader (gpt-5-mini) evaluates against 2-67 rubric criteria, scoring each from 0 to its maximum points. Reward is normalized: total earned / total possible (0.0 to 1.0).
+This is a single-turn environment. The agent submits a response via the `submit_response` tool. An LLM grader (gpt-5-mini) evaluates against 2-67 rubric criteria, scoring each from 0 to its maximum points. Reward is normalized: total earned / total possible (0.0 to 1.0). The result lists each criterion's score by number; the criterion text and the grader's feedback stay server-side.
 
 The grader returns each score inside `<answer></answer>` tags. If a grader response cannot be parsed, the episode raises rather than substituting a score — a couldn't-grade condition is never scored as a real result.
 
