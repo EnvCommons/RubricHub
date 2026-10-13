@@ -115,3 +115,78 @@ def test_unparseable_grader_error_does_not_quote_the_grader(rubrichub):
         asyncio.run(env.submit_response(rubrichub.SubmitResponseInput(response="It is 2.")))
     for hidden in _hidden(env):
         assert hidden not in str(exc.value), hidden
+
+
+def test_session_init_reads_no_parquet(rubrichub, monkeypatch):
+    """Sessions read their row from the tables loaded at import, never a shard file."""
+    import pyarrow.parquet as pq
+
+    def no_read(*args, **kwargs):
+        raise AssertionError("session init read a parquet file")
+
+    monkeypatch.setattr(pd, "read_parquet", no_read)
+    monkeypatch.setattr(pq, "read_table", no_read)
+    monkeypatch.setattr(pq, "ParquetFile", no_read)
+    env = _env(rubrichub)
+    assert env.prompt_text and env.prompt_text != "No prompt available"
+    assert env.rubrics and all(r.points > 0 for r in env.rubrics)
+
+
+def test_task_data_matches_the_shard_row(rubrichub):
+    """The parsed prompt, rubrics and reference equal what a full read of the row gives."""
+    spec = rubrichub.RubricHub.list_tasks("train")[0]
+    env = _env(rubrichub)
+    row = pd.read_parquet(DATA_DIR / spec["file"]).iloc[spec["local_idx"]].to_dict()
+    assert env.prompt_text == env._extract_prompt(row)
+    assert env.rubrics == env._parse_rubrics(row)
+    assert env.ground_truth == row["reward_model"]["ground_truth"]
+    assert spec["data_source"] == row["data_source"] and spec["ability"] == row["ability"]
+
+
+def test_submit_response_rejects_unknown_fields(rubrichub):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        rubrichub.SubmitResponseInput(response="It is 2.", score=1.0)
+
+
+def test_grader_client_has_bounded_timeout_and_retries(rubrichub):
+    spec = rubrichub.RubricHub.list_tasks("train")[0]
+    env = rubrichub.RubricHub(spec, secrets={"openai_api_key": "unused"})
+    import httpx
+
+    assert httpx.Timeout(env.client.timeout).read <= 300
+    assert env.client.max_retries >= 3
+
+
+class FlakyGrader(ScriptedGrader):
+    """Replies with no score `misses` times per criterion, then scores normally."""
+
+    def __init__(self, misses: int) -> None:
+        super().__init__()
+        self.misses = misses
+        self.calls: dict[str, int] = {}
+
+    async def create(self, *, model: str, messages: list[dict[str, str]]):
+        prompt = messages[0]["content"]
+        self.calls[prompt] = self.calls.get(prompt, 0) + 1
+        if self.calls[prompt] <= self.misses:
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=None))])
+        return await super().create(model=model, messages=messages)
+
+
+def test_grader_reply_without_score_is_retried(rubrichub):
+    env = _env(rubrichub)
+    env.client = FlakyGrader(misses=2)
+    out = asyncio.run(env.submit_response(rubrichub.SubmitResponseInput(response="It is 2.")))
+    possible = sum(r.points for r in env.rubrics)
+    assert out.reward == sum(r.points - 1 for r in env.rubrics) / possible
+    assert set(env.client.calls.values()) == {3}
+
+
+def test_grader_that_never_scores_still_raises(rubrichub):
+    env = _env(rubrichub)
+    env.client = FlakyGrader(misses=rubrichub.GRADER_ATTEMPTS)
+    with pytest.raises(ValueError):
+        asyncio.run(env.submit_response(rubrichub.SubmitResponseInput(response="It is 2.")))
+    assert set(env.client.calls.values()) == {rubrichub.GRADER_ATTEMPTS}

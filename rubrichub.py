@@ -8,7 +8,9 @@ from typing import Any, Dict, List
 
 import numpy as np
 import openai
-import pandas as pd
+import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -86,8 +88,43 @@ def _validate_corpus(parquet_dir: Path, found: Dict[str, int]) -> None:
     raise RuntimeError(detail)
 
 
-def build_task_index() -> List[Dict[str, Any]]:
-    """Build lightweight index with row IDs and metadata from all .parquet files in data/"""
+# Decode batch size. Each shard is a single row group, so reading a shard in one call
+# holds every decompressed column chunk at once; batches keep that transient small.
+READ_BATCH_ROWS = 1024
+
+
+def _read_shard(file: Path) -> pa.Table:
+    """Read the columns a session needs from one shard.
+
+    Keeps data_source, ability, prompt, Rubrics and reward_model.ground_truth; drops
+    extra_info and reward_model.rubrics, which duplicate prompt and Rubrics.
+    """
+    names = ["data_source", "ability", "prompt", "Rubrics", "ground_truth"]
+    batches = [
+        pa.RecordBatch.from_arrays(
+            [
+                batch["data_source"],
+                batch["ability"],
+                batch["prompt"],
+                batch["Rubrics"],
+                pc.struct_field(batch["reward_model"], "ground_truth"),
+            ],
+            names=names,
+        )
+        for batch in pq.ParquetFile(file).iter_batches(
+            batch_size=READ_BATCH_ROWS,
+            columns=["data_source", "ability", "prompt", "Rubrics", "reward_model.ground_truth"],
+        )
+    ]
+    return pa.Table.from_batches(batches)
+
+
+def build_task_index() -> tuple[List[Dict[str, Any]], Dict[str, pa.Table]]:
+    """Load every shard in data/ once; return the task index and the per-shard tables.
+
+    Sessions read their row from the in-memory tables, so creating a session costs
+    the same small, constant amount of time and memory whatever the shard size.
+    """
     # Find all .parquet files in PATH / "data"
     parquet_dir = PATH / "data"
     if not parquet_dir.exists():
@@ -99,28 +136,33 @@ def build_task_index() -> List[Dict[str, Any]]:
     tasks = []
     global_row_id = 0
     found: Dict[str, int] = {}
+    tables: Dict[str, pa.Table] = {}
 
     for file in parquet_files:
-        df = pd.read_parquet(file, columns=["data_source", "ability"])
-        found[file.name] = len(df)
+        table = _read_shard(file)
+        name = file.name
+        found[name] = table.num_rows
+        tables[name] = table.select(["prompt", "Rubrics", "ground_truth"])
 
         # Create task entries with global row IDs
-        for local_idx in range(len(df)):
+        for local_idx, (data_source, ability) in enumerate(
+            zip(table["data_source"].to_pylist(), table["ability"].to_pylist())
+        ):
             tasks.append({
                 "row_id": global_row_id,
-                "file": file.name,
+                "file": name,
                 "local_idx": local_idx,
-                "data_source": df.iloc[local_idx]["data_source"],
-                "ability": df.iloc[local_idx]["ability"]
+                "data_source": data_source,
+                "ability": ability
             })
             global_row_id += 1
 
     _validate_corpus(parquet_dir, found)
-    return tasks
+    return tasks, tables
 
 
-# Load task index at module level (lightweight - only ~5-10 MB)
-TASK_INDEX = build_task_index()
+# Load the task index and task data once at module level; sessions share them.
+TASK_INDEX, SHARD_TABLES = build_task_index()
 
 
 # Grader template
@@ -157,6 +199,16 @@ Analysis: [Your 1-2 sentence explanation]
 # so repeat submissions are actively discouraged, not merely left unscored.
 REPEAT_SUBMISSION_PENALTY = -0.1
 
+# Grader request limits. A request that runs past GRADER_TIMEOUT_S is retried by the
+# OpenAI client (with backoff, as are connection errors, 429s and 5xx) up to
+# GRADER_MAX_RETRIES times, so one stuck request can't hold the episode open.
+GRADER_TIMEOUT_S = 180.0
+GRADER_MAX_RETRIES = 4
+# Grader calls per criterion when the reply carries no <answer> score (e.g. empty).
+GRADER_ATTEMPTS = 3
+
+ANSWER_TAG = re.compile(r"<answer>\s*(\d+(?:\.\d+)?)\s*</answer>", re.IGNORECASE)
+
 
 class Rubric(BaseModel):
     criterion: str
@@ -171,7 +223,7 @@ class TaskSpec(BaseModel):
     ability: str
 
 
-class SubmitResponseInput(BaseModel):
+class SubmitResponseInput(BaseModel, extra="forbid"):
     response: str = Field(..., description="Your response to the prompt")
 
 
@@ -186,7 +238,9 @@ class RubricHub(Environment):
         if not api_key:
             raise ValueError("OpenAI API key required in secrets")
 
-        self.client = openai.AsyncClient(api_key=api_key)
+        self.client = openai.AsyncClient(
+            api_key=api_key, timeout=GRADER_TIMEOUT_S, max_retries=GRADER_MAX_RETRIES
+        )
         self.validated = TaskSpec.model_validate(task_spec)
 
         # Graded submissions this session. The grading output breaks the score
@@ -237,20 +291,20 @@ class RubricHub(Environment):
         return [TextBlock(text=instructions + self.prompt_text)]
 
     def _load_task_data(self, file: str, local_idx: int) -> Dict[str, Any]:
-        """Load specific task by file and local index (MEMORY EFFICIENT)"""
-        parquet_dir = PATH / "data"
-        file_path = parquet_dir / file
+        """Load specific task by file and local index from the module-level tables"""
+        table = SHARD_TABLES.get(file)
+        if table is None:
+            raise FileNotFoundError(f"Parquet file not found: {PATH / 'data' / file}")
 
-        if not file_path.exists():
-            raise FileNotFoundError(f"Parquet file not found: {file_path}")
+        if not 0 <= local_idx < table.num_rows:
+            raise IndexError(f"Local index {local_idx} out of range for file {file} (length: {table.num_rows})")
 
-        # Read just the specific row we need
-        df = pd.read_parquet(file_path)
-
-        if local_idx >= len(df):
-            raise IndexError(f"Local index {local_idx} out of range for file {file} (length: {len(df)})")
-
-        return df.iloc[local_idx].to_dict()
+        row = table.slice(local_idx, 1).to_pylist()[0]
+        return {
+            "prompt": row["prompt"],
+            "Rubrics": row["Rubrics"],
+            "reward_model": {"ground_truth": row["ground_truth"]},
+        }
 
     @staticmethod
     def _coerce_rubric_list(rubrics_data: Any) -> list:
@@ -322,12 +376,14 @@ class RubricHub(Environment):
         )
 
         # Use gpt-5-mini (NO temperature parameter per guidelines)
-        res = await self.client.chat.completions.create(
-            model="gpt-5-mini",
-            messages=[{"role": "user", "content": grader_prompt}]
-        )
-
-        grading_response = res.choices[0].message.content or ""
+        for _ in range(GRADER_ATTEMPTS):
+            res = await self.client.chat.completions.create(
+                model="gpt-5-mini",
+                messages=[{"role": "user", "content": grader_prompt}]
+            )
+            grading_response = res.choices[0].message.content or ""
+            if ANSWER_TAG.search(grading_response):
+                break
         score = self._parse_score(grading_response, max_points)
 
         return {
@@ -349,9 +405,7 @@ class RubricHub(Environment):
     def _parse_score(self, grading_response: str, max_points: int) -> float:
         """Extract the score from the judge's <answer></answer> tag."""
         # Last tag wins, so a tag quoted inside the analysis can't shadow the real score.
-        matches = re.findall(
-            r"<answer>\s*(\d+(?:\.\d+)?)\s*</answer>", grading_response, re.IGNORECASE
-        )
+        matches = ANSWER_TAG.findall(grading_response)
         if not matches:
             # Raise rather than guess: a fabricated score is indistinguishable from a real one.
             # The grader's reply can restate the criterion or reference answer, and exception

@@ -17,6 +17,11 @@ RubricHub is an environment for evaluating open-ended generation tasks using rub
 
 Agents are given a standard environment with no sandbox or file system access.
 
+The server loads the prompt, rubric and reference columns of all five shards into memory
+once at startup (about 1.5 GB RSS in total) and serves every session from them, so
+per-session memory is small and constant. Run it on a pod with at least 2 GB of memory
+(the default 2 CPU / 4 GB is comfortable).
+
 ## License
 
 [Apache 2.0](https://opensource.org/licenses/Apache-2.0).
@@ -42,7 +47,7 @@ while the other four are capitalised.
 
 This is a single-turn environment. The agent submits a response via the `submit_response` tool. An LLM grader (gpt-5-mini) evaluates against 2-67 rubric criteria, scoring each from 0 to its maximum points. Reward is normalized: total earned / total possible (0.0 to 1.0). The result lists each criterion's score by number; the criterion text and the grader's feedback stay server-side.
 
-The grader returns each score inside `<answer></answer>` tags. If a grader response cannot be parsed, the episode raises rather than substituting a score — a couldn't-grade condition is never scored as a real result.
+The grader returns each score inside `<answer></answer>` tags. A reply without a score is re-requested, up to three calls per criterion; each grader request has a 180 s timeout and up to four client retries. If a criterion still has no parseable score, the episode raises rather than substituting a score — a couldn't-grade condition is never scored as a real result.
 
 ## Data
 
