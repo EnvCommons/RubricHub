@@ -1,10 +1,10 @@
 # RubricHub
 
-[![OpenReward Environment](https://img.shields.io/badge/%E2%AD%90%20OpenReward-Environment-f7e6cc)](https://www.openreward.ai/GeneralReasoning/RubricHub) [![Hugging Face Dataset](https://img.shields.io/badge/Hugging%20Face-Dataset-orange)](https://huggingface.co/datasets/sojuL/RubricHub_v1)
+[![OpenReward Environment](https://img.shields.io/badge/%E2%AD%90%20OpenReward-Environment-f7e6cc)](https://openreward.ai/GeneralReasoning/RubricHub) [![Hugging Face Dataset](https://img.shields.io/badge/Hugging%20Face-Dataset-orange)](https://huggingface.co/datasets/sojuL/RubricHub_v1)
 
 ## Description
 
-RubricHub is an environment for evaluating open-ended generation tasks using rubric-based LLM grading. It contains 181,528 tasks across five domains — chat, instruction following, medical, science and writing — and each task carries 2-67 detailed rubric criteria for fine-grained evaluation. Prompts are multilingual (English and Chinese predominate), and rubric criteria are written in the language of their prompt.
+RubricHub is an environment for evaluating open-ended generation tasks using rubric-based LLM grading. It contains 181,528 tasks across five domains (chat, instruction following, medical, science and writing), and each task carries 2-67 detailed rubric criteria for fine-grained evaluation. Prompts are multilingual (English and Chinese predominate), and rubric criteria are written in the language of their prompt.
 
 ## Capabilities
 
@@ -17,19 +17,15 @@ RubricHub is an environment for evaluating open-ended generation tasks using rub
 
 Agents are given a standard environment with no sandbox or file system access.
 
-The server loads the prompt, rubric and reference columns of all five shards into memory
-once at startup (about 1.5 GB RSS in total) and serves every session from them, so
-per-session memory is small and constant. Run it on a pod with at least 2 GB of memory
-(the default 2 CPU / 4 GB is comfortable).
+The server loads the prompt, rubric and reference columns of all five shards into memory once at startup (about 1.5 GB RSS in total) and serves every session from them, so per-session memory is small and constant. Run it on a pod with at least 2 GB of memory (the default 2 CPU / 4 GB is comfortable).
 
 ## License
 
-[Apache 2.0](https://opensource.org/licenses/Apache-2.0).
+[MIT](https://opensource.org/licenses/MIT). The underlying RubricHub_v1 dataset is Apache-2.0.
 
 ## Tasks
 
-There is a single split, **train**, with **181,528 tasks**. `list_splits()` returns only
-`["train"]`; any other split name raises.
+There is a single split, **train**, with **181,528 tasks**. `list_splits()` returns only `["train"]`; any other split name raises.
 
 | domain (`ability`) | tasks |
 |---|---:|
@@ -39,28 +35,19 @@ There is a single split, **train**, with **181,528 tasks**. `list_splits()` retu
 | Writing | 17,444 |
 | chat | 9,812 |
 
-`ability` and `data_source` carry the same value on every row. Neither affects grading —
-they are metadata, useful for stratifying results by domain. Note `chat` is lower-case
-while the other four are capitalised.
+`ability` and `data_source` carry the same value on every row. Neither affects grading; they are metadata, useful for stratifying results by domain. Note `chat` is lower-case while the other four are capitalised.
 
 ## Reward Structure
 
-This is a single-turn environment. The agent submits a response via the `submit_response` tool. An LLM grader (gpt-5-mini) evaluates against 2-67 rubric criteria, scoring each from 0 to its maximum points. Reward is normalized: total earned / total possible (0.0 to 1.0). The result lists each criterion's score by number; the criterion text and the grader's feedback stay server-side.
+This is a single-turn environment. The agent submits a response via the `submit_response` tool. An LLM grader (gpt-5-mini) evaluates against 2-67 rubric criteria, scoring each from 0 to its maximum points. Reward is normalized: total earned / total possible (0.0 to 1.0). Only the first submission is graded; a repeat submission gets -0.1. The result lists each criterion's score by number; the criterion text and the grader's feedback stay server-side.
 
-The grader returns each score inside `<answer></answer>` tags. A reply without a score is re-requested, up to three calls per criterion; each grader request has a 180 s timeout and up to four client retries. If a criterion still has no parseable score, the episode raises rather than substituting a score — a couldn't-grade condition is never scored as a real result.
+The grader returns each score inside `<answer></answer>` tags. A reply without a score is re-requested, up to three calls per criterion; each grader request has a 180 s timeout and up to four client retries. If a criterion still has no parseable score, the episode raises rather than substituting a score: a couldn't-grade condition is never scored as a real result.
 
 ## Data
 
-Five Parquet files (~995 MiB total), one per domain, sourced from the **`RuRL/`** directory
-of [HuggingFace sojuL/RubricHub_v1](https://huggingface.co/datasets/sojuL/RubricHub_v1) and
-stored on the OpenReward platform. Each row contains a prompt, rubric criteria with point
-values, and task metadata.
+Five Parquet files (~995 MiB total), one per domain, sourced from the **`RuRL/`** directory of [HuggingFace sojuL/RubricHub_v1](https://huggingface.co/datasets/sojuL/RubricHub_v1) and stored on the OpenReward platform. Each row contains a prompt, rubric criteria with point values, and task metadata.
 
-The dataset repo also holds a `sft_RuFT/` directory (182,732 rows) which is **not** part of
-this environment: it is supervised-fine-tuning data whose rows already carry a model answer,
-a `rubric_score` and per-criterion judge verdicts. It uses a different schema and adds no new
-prompts. See `DATA_UPLOAD.md` — the environment validates its corpus at import and raises if a
-domain shard is missing.
+The dataset repo also holds a `sft_RuFT/` directory (182,732 rows) which is **not** part of this environment: it is supervised-fine-tuning data whose rows already carry a model answer, a `rubric_score` and per-criterion judge verdicts. It uses a different schema and adds no new prompts. See `DATA_UPLOAD.md`. The environment validates its corpus at import and raises if a domain shard is missing.
 
 ## Tools
 
@@ -72,10 +59,6 @@ domain shard is missing.
 
 Single-turn. The agent reads the prompt and submits one response.
 
-## Environment Difficulty
-
-RubricHub evaluates open-ended generation quality across multiple domains with fine-grained rubric assessment.
-
 ## Other Environment Requirements
 
 OpenAI API key required for LLM-based grading. Pass via `secrets={"openai_api_key": "..."}`.
@@ -84,7 +67,7 @@ OpenAI API key required for LLM-based grading. Pass via `secrets={"openai_api_ke
 
 Agents in RubricHub generate text responses in a standard environment. The environment does not present direct safety risks.
 
-## Citation
+## Citations
 
 ```bibtex
 @article{li2026rubrichub,
